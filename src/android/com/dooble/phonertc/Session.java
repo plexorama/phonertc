@@ -55,8 +55,14 @@ public class Session {
 
 		// Initialize ICE server list
 		final LinkedList<PeerConnection.IceServer> iceServers = new LinkedList<PeerConnection.IceServer>();
-		iceServers.add(new PeerConnection.IceServer("stun:stun.l.google.com:19302"));
-		iceServers.add(new PeerConnection.IceServer(_config.getTurnServerHost(),
+		//iceServers.add(new PeerConnection.IceServer("stun:stun.l.google.com:19302"));
+    if (!_config.getStunServerHost().equals(""))
+			iceServers.add(new PeerConnection.IceServer(_config.getStunServerHost(),
+													_config.getStunServerUsername(),
+													_config.getStunServerPassword()));
+	
+		if (!_config.getTurnServerHost().equals(""))
+			iceServers.add(new PeerConnection.IceServer(_config.getTurnServerHost(),
 													_config.getTurnServerUsername(), 
 													_config.getTurnServerPassword()));
 		
@@ -69,7 +75,7 @@ public class Session {
 		
 		// Initialize PeerConnection
 		MediaConstraints pcMediaConstraints = new MediaConstraints();
-		pcMediaConstraints.optional.add(new MediaConstraints.KeyValuePair(
+		pcMediaConstraints.mandatory.add(new MediaConstraints.KeyValuePair(
 			"DtlsSrtpKeyAgreement", "true"));
 		
 		_peerConnection = _plugin.getPeerConnectionFactory()
@@ -110,7 +116,7 @@ public class Session {
 			} else if (type.equals("answer") || type.equals("offer")) {
 				final SessionDescription sdp = new SessionDescription(
 						SessionDescription.Type.fromCanonicalForm(type),
-						preferISAC((String) json.get("sdp")));
+						preferCodec((String) json.get("sdp")));
 				_plugin.getActivity().runOnUiThread(new Runnable() {
 					public void run() {
 						_peerConnection.setRemoteDescription(_sdpObserver, sdp);
@@ -157,32 +163,35 @@ public class Session {
 		_callbackContext.sendPluginResult(result);
 	}
 
-	String preferISAC(String sdpDescription) {
+	String preferCodec(String sdpDescription) {
+    String preferredCodec = _config.getPreferredCodec();
+	  if (preferredCodec == null) return sdpDescription;
+
 		String[] lines = sdpDescription.split("\r?\n");
 		int mLineIndex = -1;
-		String isac16kRtpMap = null;
-		Pattern isac16kPattern = Pattern
-				.compile("^a=rtpmap:(\\d+) ISAC/16000[\r]?$");
+		String codecRtpMap = null;
+		Pattern codecPattern = Pattern
+				.compile("^a=rtpmap:(\\d+) "+preferredCodec+"/.*[\r]?$");
 		for (int i = 0; (i < lines.length)
-				&& (mLineIndex == -1 || isac16kRtpMap == null); ++i) {
+				&& (mLineIndex == -1 || codecRtpMap == null); ++i) {
 			if (lines[i].startsWith("m=audio ")) {
 				mLineIndex = i;
 				continue;
 			}
-			Matcher isac16kMatcher = isac16kPattern.matcher(lines[i]);
-			if (isac16kMatcher.matches()) {
-				isac16kRtpMap = isac16kMatcher.group(1);
+			Matcher codecMatcher = codecPattern.matcher(lines[i]);
+			if (codecMatcher.matches()) {
+				codecRtpMap = codecMatcher.group(1);
 				continue;
 			}
 		}
 		if (mLineIndex == -1) {
 			Log.d("com.dooble.phonertc",
-					"No m=audio line, so can't prefer iSAC");
+					"No m=audio line, so can't prefer "+ preferredCodec);
 			return sdpDescription;
 		}
-		if (isac16kRtpMap == null) {
+		if (codecRtpMap == null) {
 			Log.d("com.dooble.phonertc",
-					"No ISAC/16000 line, so can't prefer iSAC");
+					"No "+preferredCodec+"/XXXX line, so can't prefer "+preferredCodec);
 			return sdpDescription;
 		}
 		String[] origMLineParts = lines[mLineIndex].split(" ");
@@ -192,9 +201,9 @@ public class Session {
 		newMLine.append(origMLineParts[origPartIndex++]).append(" ");
 		newMLine.append(origMLineParts[origPartIndex++]).append(" ");
 		newMLine.append(origMLineParts[origPartIndex++]).append(" ");
-		newMLine.append(isac16kRtpMap).append(" ");
+		newMLine.append(codecRtpMap).append(" ");
 		for (; origPartIndex < origMLineParts.length; ++origPartIndex) {
-			if (!origMLineParts[origPartIndex].equals(isac16kRtpMap)) {
+			if (!origMLineParts[origPartIndex].equals(codecRtpMap)) {
 				newMLine.append(origMLineParts[origPartIndex]).append(" ");
 			}
 		}
@@ -350,7 +359,7 @@ public class Session {
 			_plugin.getActivity().runOnUiThread(new Runnable() {
 				public void run() {
 					SessionDescription sdp = new SessionDescription(
-							origSdp.type, preferISAC(origSdp.description));
+							origSdp.type, preferCodec(origSdp.description));
 					try {
 						JSONObject json = new JSONObject();
 						json.put("type", sdp.type.canonicalForm());
